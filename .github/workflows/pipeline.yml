@@ -15,6 +15,7 @@ name: Pipeline de Promoção
 # (developer -> qaa -> homologacao -> main). "acceptance" só roda nos PRs que promovem de fato
 # (para qaa, homologacao ou main).
 on:
+  workflow_dispatch: {}
   push:
     branches:
       - developer
@@ -126,4 +127,5 @@ jobs:
       #   5. derrubar containers/rede ao final (if: always())
       - name: Placeholder — aguardando código da aplicação
         if: steps.app.outputs.exists != 'true'
-        run: echo "Nada a validar ainda: sem Dockerfile na raiz."
+        run: |
+          echo "Nada a validar ainda: sem Dockerfile na raiz."

@@ -11,7 +11,7 @@ name: Auto-merge de promoção
 # terminarem (nada é pulado) e só então tenta o merge administrativo.
 #
 # Pré-requisito manual (fora deste arquivo, uma vez que o repositório exista no GitHub):
-#   - Secret AUTOMERGE_PAT: um Personal Access Token fine-grained do dono do repositório, com
+#   - Secret MASCARA_KEY: um Personal Access Token fine-grained do dono do repositório, com
 #     permissões "Contents: write", "Pull requests: write" e "Administration: Read and write".
 #     Sem ele, este workflow falha ao tentar o merge administrativo.
 on:
@@ -36,7 +36,7 @@ jobs:
     steps:
       - name: Esperar os checks obrigatórios e mergear com privilégio de admin
         env:
-          GH_TOKEN: ${{ secrets.AUTOMERGE_PAT }}
+          GH_TOKEN: ${{ secrets.MASCARA_KEY }}
           GH_REPO: ${{ github.repository }}
         run: |
           pr="${{ github.event.pull_request.number }}"
