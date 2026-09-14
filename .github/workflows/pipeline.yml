@@ -1,0 +1,129 @@
+name: Pipeline de Promoção
+
+# Espelha o fluxo developer -> qaa -> homologacao -> main adotado em mais_saude_publica
+# (ver referência em doc/adr/ADR-018.md, seção 2.2), adaptado ao stack Node/NestJS + React
+# definido no ADR-001 deste projeto.
+#
+# Este projeto ainda não tem código de aplicação (só os ADRs em doc/adr) - cada estágio abaixo
+# detecta a ausência de package.json/Dockerfile e vira no-op automaticamente, sem falhar a
+# pipeline. Assim que o código real existir (com um package.json na raiz expondo os scripts
+# "lint", "test" e "build", e um Dockerfile na raiz), os estágios passam a rodar de verdade sem
+# precisar editar este arquivo.
+#
+# 3 estágios em sequência (test -> analyze -> acceptance, via needs): se um falhar, o próximo nem
+# começa. "test" e "analyze" rodam em todo push em developer e em todo PR de promoção
+# (developer -> qaa -> homologacao -> main). "acceptance" só roda nos PRs que promovem de fato
+# (para qaa, homologacao ou main).
+on:
+  push:
+    branches:
+      - developer
+  pull_request:
+    branches:
+      - developer
+      - qaa
+      - homologacao
+      - main
+
+# Cancela um run anterior do mesmo PR/branch quando chega um commit novo.
+concurrency:
+  group: pipeline-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verificar se há aplicação para testar
+        id: app
+        run: |
+          if [ -f package.json ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Nenhum package.json na raiz ainda — projeto só tem ADRs (doc/adr). Estágio 'test' é no-op até o código da aplicação existir (ver ADR-014, escopo do MVP)."
+          fi
+
+      - name: Set up Node.js
+        if: steps.app.outputs.exists == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Instalar dependências
+        if: steps.app.outputs.exists == 'true'
+        run: npm ci
+
+      - name: Lint
+        if: steps.app.outputs.exists == 'true'
+        run: npm run lint --if-present
+
+      - name: Type-check
+        if: steps.app.outputs.exists == 'true'
+        run: npm run typecheck --if-present
+
+      - name: Testes unitários e de integração
+        if: steps.app.outputs.exists == 'true'
+        run: npm test --if-present
+
+  analyze:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verificar se há código para analisar
+        id: app
+        run: |
+          if [ -f package.json ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Initialize CodeQL
+        if: steps.app.outputs.exists == 'true'
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+
+      - name: Perform CodeQL Analysis
+        if: steps.app.outputs.exists == 'true'
+        uses: github/codeql-action/analyze@v3
+
+  acceptance:
+    needs: analyze
+    if: github.event_name == 'pull_request' && contains(fromJson('["qaa","homologacao","main"]'), github.base_ref)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Verificar se há aplicação para validar
+        id: app
+        run: |
+          if [ -f Dockerfile ]; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Nenhum Dockerfile na raiz ainda. Estágio de aceitação (build de imagem + suíte E2E, ver ADR-017 §2.1) é no-op até a aplicação existir."
+          fi
+
+      # TODO quando a aplicação existir (ADR-001 arquitetura, ADR-006 motor de resolução,
+      # ADR-017 estratégia de testes):
+      #   1. docker/build-push-action para buildar a imagem real (Dockerfile multi-stage)
+      #   2. subir um Postgres efêmero (services: postgres:16, como em mais_saude_publica)
+      #   3. subir a aplicação em container e esperar o endpoint de saúde responder
+      #   4. rodar a suíte E2E (Playwright, ver ADR-017 §2.1) contra a aplicação de pé
+      #   5. derrubar containers/rede ao final (if: always())
+      - name: Placeholder — aguardando código da aplicação
+        if: steps.app.outputs.exists != 'true'
+        run: echo "Nada a validar ainda: sem Dockerfile na raiz."

@@ -1,0 +1,60 @@
+name: Auto-merge de promoção
+
+# Mesma lógica do mais_saude_publica (ver doc/adr/ADR-018.md): automatiza o único passo manual
+# que sobra depois de abrir o PR de promoção (developer -> qaa -> homologacao -> main). Só dispara
+# nas 3 promoções reais do fluxo.
+#
+# Usa "gh pr merge --admin" em vez de "--auto" porque, assim que um Ruleset de aprovação
+# obrigatória para terceiros existir neste repositório (a ser configurado manualmente no GitHub,
+# não neste arquivo), a fila de auto-merge padrão não aplica o bypass de admin sozinha — só um
+# merge explícito com privilégio administrativo aplica. O job espera os checks obrigatórios
+# terminarem (nada é pulado) e só então tenta o merge administrativo.
+#
+# Pré-requisito manual (fora deste arquivo, uma vez que o repositório exista no GitHub):
+#   - Secret AUTOMERGE_PAT: um Personal Access Token fine-grained do dono do repositório, com
+#     permissões "Contents: write", "Pull requests: write" e "Administration: Read and write".
+#     Sem ele, este workflow falha ao tentar o merge administrativo.
+on:
+  pull_request:
+    types: [opened, reopened]
+    branches:
+      - qaa
+      - homologacao
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  admin-merge:
+    if: |
+      (github.base_ref == 'qaa' && github.head_ref == 'developer') ||
+      (github.base_ref == 'homologacao' && github.head_ref == 'qaa') ||
+      (github.base_ref == 'main' && github.head_ref == 'homologacao')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Esperar os checks obrigatórios e mergear com privilégio de admin
+        env:
+          GH_TOKEN: ${{ secrets.AUTOMERGE_PAT }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          pr="${{ github.event.pull_request.number }}"
+          for i in $(seq 1 90); do
+            data=$(gh pr view "$pr" --json statusCheckRollup)
+            pending=$(echo "$data" | jq '[.statusCheckRollup[] | select(.__typename=="CheckRun" and .name != "admin-merge" and (.conclusion==null or .conclusion==""))] | length')
+            failed=$(echo "$data" | jq '[.statusCheckRollup[] | select(.__typename=="CheckRun" and .name != "admin-merge" and (.conclusion=="FAILURE" or .conclusion=="CANCELLED" or .conclusion=="TIMED_OUT" or .conclusion=="ACTION_REQUIRED"))] | length')
+            if [ "$failed" -gt 0 ]; then
+              echo "Um check obrigatório falhou - não vou mergear."
+              exit 1
+            fi
+            if [ "$pending" -eq 0 ]; then
+              echo "Todos os checks concluídos - mergeando com privilégio de admin."
+              gh pr merge "$pr" --merge --admin
+              exit 0
+            fi
+            echo "Tentativa $i: ainda esperando checks terminarem..."
+            sleep 20
+          done
+          echo "Checks não terminaram a tempo (30 min)."
+          exit 1
